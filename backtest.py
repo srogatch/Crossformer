@@ -6,7 +6,7 @@ import pickle
 from datetime import datetime
 import sys
 
-import numpy
+import numpy as np
 import pandas as pd
 import MetaTrader5 as mt5
 import torch
@@ -141,9 +141,11 @@ if __name__ == '__main__':
     capital = 1
     n_pos = 0
     n_days = 0
+
     for i in range(args.in_len, args.in_len+4):
         task_qu.put(i)
-
+    growth_series = np.geomspace(
+        start=min_growth, stop=min_growth*pow(minute_daily_growth, args.out_len-1), num=args.out_len)
     items = range(args.in_len, rates_frame.shape[0]-args.out_len)
     gpu_res = dict()
     for i in tqdm(items):
@@ -165,22 +167,15 @@ if __name__ == '__main__':
         if pos_open is None:
             if df_history['close'].iloc[-1] <= df_prediction['low'][0]:
                 buy_market = df_history['close'].iloc[-1]
+                b_open = np.any(df_prediction['high'] - growth_series * buy_market >= 0)
+                if b_open:
+                    pos_open = buy_market
+                    n_pos += 1
                 req_growth = min_growth
-                for j in range(0, args.out_len):
-                    if df_prediction['high'][j] >= req_growth * buy_market:
-                        pos_open = buy_market
-                        n_pos += 1
-                        break
-                    req_growth *= minute_daily_growth
             else:
                 buy_limit = df_prediction['low'][0]
                 req_growth = min_growth
-                b_enter = False
-                for j in range(1, args.out_len):
-                    if df_prediction['high'][j] >= req_growth * buy_limit:
-                        b_enter = True
-                        break
-                    req_growth *= minute_daily_growth
+                b_enter = np.any(df_prediction['high'][1:] - growth_series[:-1] * buy_limit >= 0)
                 if b_enter and buy_limit >= df_actual['low'][0]:
                     pos_open = buy_limit
                     n_pos += 1
