@@ -16,16 +16,20 @@ from cross_exp.exp_crossformer import Exp_crossformer
 from utils.tools import load_args, string_split, StandardScaler
 
 c_spread = 1.5259520851045277178296601486713e-4
-min_growth = math.pow(1 + c_spread, 3)
+min_growth = math.pow(1 + c_spread, 10)
 max_daily_growth = 1.06
 minute_daily_growth = math.pow(max_daily_growth, 1.0/480)
 LEVERAGE = 10
 BARS_PER_DAY = 1440
+DIRECTION = -1 # 1 for Buy, -1 for Sell
+COLUMN_NAMES = ['open', 'high', 'low', 'close', 'tick_volume']
 
 
 def calc_pl(open_price: float, close_price: float):
-    # cur_pl = close_price / ((1 + c_spread) * open_price) - 1
-    cur_pl = open_price / ((1 + c_spread) * close_price) - 1
+    if DIRECTION > 0:
+        cur_pl = close_price / ((1 + c_spread) * open_price) - 1
+    else:
+        cur_pl = open_price / ((1 + c_spread) * close_price) - 1
     return cur_pl
 
 
@@ -78,8 +82,8 @@ if not mt5.initialize():
     mt5.shutdown()
     sys.exit(1)
 
-# start_date = datetime(2022, 4, 8, 1, 37)
-start_date = datetime(2022, 10, 9)
+start_date = datetime(2022, 4, 8, 1, 37)
+# start_date = datetime(2022, 10, 9)
 rates = mt5.copy_rates_range('US500.pro', mt5.TIMEFRAME_M1, start_date, datetime.now())
 # create DataFrame out of the obtained data
 rates_frame = pd.DataFrame(rates)
@@ -102,8 +106,7 @@ def gpu_worker(in_qu: multiprocessing.Queue, out_qu: multiprocessing.Queue):
     else:
         args.data_split = hyper_parameters['data_split']
 
-    column_names = ['open', 'high', 'low', 'close', 'tick_volume']
-    df_data = rates_frame[column_names]
+    df_data = rates_frame[COLUMN_NAMES]
     scaler = StandardScaler(mean=args.scale_statistic['mean'], std=args.scale_statistic['std'])
     data = torch.Tensor(scaler.transform(df_data.values)).float().to(exp.device)
     exp.model.eval()
@@ -114,15 +117,10 @@ def gpu_worker(in_qu: multiprocessing.Queue, out_qu: multiprocessing.Queue):
             return
         with torch.no_grad():
             history = data[i_rate - args.in_len:i_rate].unsqueeze(0)
-            actual = data[i_rate:i_rate + args.out_len].unsqueeze(0)
             prediction = exp.model(history)
-            history = scaler.inverse_transform(history).squeeze(0).to('cpu').numpy()
-            actual = scaler.inverse_transform(actual).squeeze(0).to('cpu').numpy()
             prediction = scaler.inverse_transform(prediction).squeeze(0).to('cpu').numpy()
-            df_history = pd.DataFrame(history, columns=column_names)
-            df_actual = pd.DataFrame(actual, columns=column_names)
-            df_prediction = pd.DataFrame(prediction, columns=column_names)
-            out_qu.put({'i_rate': i_rate, 'history': df_history, 'actual': df_actual, 'prediction': df_prediction})
+            df_prediction = pd.DataFrame(prediction, columns=COLUMN_NAMES)
+            out_qu.put({'i_rate': i_rate, 'prediction': df_prediction})
 
 
 if __name__ == '__main__':
@@ -144,6 +142,7 @@ if __name__ == '__main__':
 
     for i in range(args.in_len, args.in_len+4):
         task_qu.put(i)
+    df_data = rates_frame[COLUMN_NAMES]
     growth_series = np.geomspace(
         start=min_growth, stop=min_growth*pow(minute_daily_growth, args.out_len-1), num=args.out_len)
     items = range(args.in_len, rates_frame.shape[0]-args.out_len)
@@ -161,13 +160,13 @@ if __name__ == '__main__':
         cur_res = gpu_res[i]
         del gpu_res[i]
 
-        df_history = cur_res['history']
-        df_actual = cur_res['actual']
+        df_history = df_data.iloc[i - args.in_len:i].reset_index(drop=True)
+        df_actual = df_data.iloc[i:i + args.out_len].reset_index(drop=True)
         df_prediction = cur_res['prediction']
         if pos_open is None:
             if df_history['close'].iloc[-1] <= df_prediction['low'][0]:
                 buy_market = df_history['close'].iloc[-1]
-                b_open = np.any(df_prediction['high'] >= growth_series) # * buy_market
+                b_open = np.any(df_prediction['high'] >= growth_series * buy_market)
                 if b_open:
                     pos_open = buy_market
                     n_pos += 1
@@ -175,14 +174,15 @@ if __name__ == '__main__':
             else:
                 buy_limit = df_prediction['low'][0]
                 req_growth = min_growth
-                b_enter = np.any(df_prediction['high'][1:] >= growth_series[:-1]) # * buy_limit
+                b_enter = np.any(df_prediction['high'][1:] >= growth_series[:-1] * buy_limit)
                 if b_enter and buy_limit >= df_actual['low'][0]:
                     pos_open = buy_limit
                     n_pos += 1
         else:
             if df_prediction['low'][0] * min_growth < df_history['close'].iloc[-1]:
                 take_profit = df_prediction['high'][0]
-                if df_actual['high'][0] >= take_profit:
+                if (DIRECTION < 0 and df_actual['low'][0] <= take_profit) or \
+                        (DIRECTION > 0 and df_actual['high'][0] >= take_profit):
                     cur_pl = calc_pl(pos_open, take_profit)
                     pos_open = None
                     capital += LEVERAGE * capital * cur_pl
