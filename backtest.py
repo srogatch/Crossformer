@@ -15,18 +15,20 @@ from tqdm import tqdm
 from cross_exp.exp_crossformer import Exp_crossformer
 from utils.tools import load_args, string_split, StandardScaler
 
-c_spread = 1.5259520851045277178296601486713e-4
-min_growth_perc = 0.99
+C_SPREAD = 1.5259520851045277178296601486713e-4
+MIN_GROWTH_PERC = 0.99
 LEVERAGE = 1
 BARS_PER_DAY = 1440
 COLUMN_NAMES = ['open', 'high', 'low', 'close', 'tick_volume']
+BATCH_SIZE = 128
+N_BATCHES_AHEAD = 8
 
 
 def calc_pl(open_price: float, close_price: float, direction: int):
     if direction > 0:
-        cur_pl = close_price / ((1 + c_spread) * open_price) - 1
+        cur_pl = close_price / ((1 + C_SPREAD) * open_price) - 1
     else:
-        cur_pl = open_price / ((1 + c_spread) * close_price) - 1
+        cur_pl = open_price / ((1 + C_SPREAD) * close_price) - 1
     return cur_pl
 
 
@@ -113,11 +115,13 @@ def gpu_worker(in_qu: multiprocessing.Queue, out_qu: multiprocessing.Queue):
         if i_rate is None:
             return
         with torch.no_grad():
-            history = data[i_rate - args.in_len:i_rate].unsqueeze(0)
+            history = data.unfold(dimension=0, size=args.in_len, step=1)[i_rate:i_rate+BATCH_SIZE]
+            history = history.permute(0, 2, 1)
             prediction = exp.model(history)
-            prediction = scaler.inverse_transform(prediction).squeeze(0).to('cpu').numpy()
-            df_prediction = pd.DataFrame(prediction, columns=COLUMN_NAMES)
-            out_qu.put({'i_rate': i_rate, 'prediction': df_prediction})
+            prediction = scaler.inverse_transform(prediction)
+            prediction = prediction.to('cpu').numpy()
+            dfs_prediction = [pd.DataFrame(prediction[i, :, :], columns=COLUMN_NAMES) for i in range(prediction.shape[0])]
+            out_qu.put({'i_rate': i_rate, 'predictions': dfs_prediction})
 
 
 if __name__ == '__main__':
@@ -138,27 +142,34 @@ if __name__ == '__main__':
     n_pos = 0
     n_days = 0
 
-    for i in range(args.in_len, args.in_len+4):
+    n_items = rates_frame.shape[0] - args.out_len - args.in_len
+    for i in range(0, N_BATCHES_AHEAD*BATCH_SIZE, BATCH_SIZE):
         task_qu.put(i)
     df_data = rates_frame[COLUMN_NAMES]
-    items = range(args.in_len, rates_frame.shape[0]-args.out_len)
     gpu_res = dict()
-    for i in tqdm(items):
-        if i+4 < rates_frame.shape[0]-args.out_len:
-            task_qu.put(i+4)
+    for i in tqdm(range(n_items)):
+        if i%BATCH_SIZE == 0 and i+N_BATCHES_AHEAD*BATCH_SIZE < rates_frame.shape[0]-args.out_len:
+            task_qu.put(i+N_BATCHES_AHEAD*BATCH_SIZE)
+        if pos_open is not None:
+            cur_pl = calc_pl(pos_open, open_price, pos_dir)
+            if capital <= LEVERAGE * capital * cur_pl:
+                print('Margin call')
+                sys.exit(-1)
         if (i+1) % BARS_PER_DAY == 0:
             n_days += 1
             yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
             print('Running capital:', capital, ' n_pos:', n_pos, ' n_days:', n_days, ' yearly:', yearly_growth)
-        while gpu_res.get(i) is None:
+        while gpu_res.get(i - i%BATCH_SIZE) is None:
             cur_res = res_qu.get()
             gpu_res[cur_res['i_rate']] = cur_res
-        cur_res = gpu_res[i]
-        del gpu_res[i]
+        cur_res = gpu_res[i - i%BATCH_SIZE]
+        if i % BATCH_SIZE == BATCH_SIZE-1:
+            del gpu_res[i - i%BATCH_SIZE]
 
-        df_history = df_data.iloc[i - args.in_len:i].reset_index(drop=True)
-        df_actual = df_data.iloc[i:i + args.out_len].reset_index(drop=True)
-        df_prediction = cur_res['prediction']
+        i_rate = i + args.in_len
+        df_history = df_data.iloc[i:i_rate].reset_index(drop=True)
+        df_actual = df_data.iloc[i_rate:i_rate + args.out_len].reset_index(drop=True)
+        df_prediction = cur_res['predictions'][i%BATCH_SIZE]
         open_price = df_history['close'].iloc[-1]
         min_price = df_prediction['low'].min()
         max_price = df_prediction['high'].max()
@@ -169,13 +180,10 @@ if __name__ == '__main__':
             open_dir = 1
         else:
             open_dir = -1
-        if pos_dir is None or (pos_dir * open_dir < 0 and delta_diff > min_growth_perc * 0.01):
+        if pos_dir is None or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01):
             if pos_dir is not None:
                 cur_pl = calc_pl(pos_open, open_price, pos_dir)
                 capital += LEVERAGE * capital * cur_pl
-                if capital <= 0:
-                    print('Margin call')
-                    sys.exit(-1)
             pos_dir = open_dir
             n_pos += 1
             pos_open = open_price
