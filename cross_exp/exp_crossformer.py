@@ -1,3 +1,5 @@
+import datetime
+
 from data.data_loader import Dataset_MTS
 from cross_exp.exp_basic import Exp_Basic
 from cross_models.cross_former import Crossformer
@@ -127,12 +129,13 @@ class Exp_crossformer(Exp_Basic):
                     train_data, batch_x, batch_y)
                 loss = criterion(pred, true)
                 train_loss.append(loss.item())
-                
-                if (i+1) % 100==0:
+
+                if time.time() - time_now >= 600:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time()-time_now)/iter_count
                     left_time = speed*((self.args.train_epochs - epoch)*train_steps - i)
-                    print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                    left_dt = datetime.timedelta(seconds=left_time)
+                    print('\tspeed: {:.4f}s/iter; left time: {}'.format(speed, str(left_dt)))
                     iter_count = 0
                     time_now = time.time()
                 
