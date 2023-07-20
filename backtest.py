@@ -16,17 +16,14 @@ from cross_exp.exp_crossformer import Exp_crossformer
 from utils.tools import load_args, string_split, StandardScaler
 
 c_spread = 1.5259520851045277178296601486713e-4
-min_growth = math.pow(1 + c_spread, 10)
-max_daily_growth = 1.06
-minute_daily_growth = math.pow(max_daily_growth, 1.0/480)
-LEVERAGE = 10
+min_growth_perc = 0.99
+LEVERAGE = 1
 BARS_PER_DAY = 1440
-DIRECTION = -1 # 1 for Buy, -1 for Sell
 COLUMN_NAMES = ['open', 'high', 'low', 'close', 'tick_volume']
 
 
-def calc_pl(open_price: float, close_price: float):
-    if DIRECTION > 0:
+def calc_pl(open_price: float, close_price: float, direction: int):
+    if direction > 0:
         cur_pl = close_price / ((1 + c_spread) * open_price) - 1
     else:
         cur_pl = open_price / ((1 + c_spread) * close_price) - 1
@@ -136,6 +133,7 @@ if __name__ == '__main__':
     del os.environ['CUDA_VISIBLE_DEVICES']
 
     pos_open = None
+    pos_dir = None
     capital = 1
     n_pos = 0
     n_days = 0
@@ -143,8 +141,6 @@ if __name__ == '__main__':
     for i in range(args.in_len, args.in_len+4):
         task_qu.put(i)
     df_data = rates_frame[COLUMN_NAMES]
-    growth_series = np.geomspace(
-        start=min_growth, stop=min_growth*pow(minute_daily_growth, args.out_len-1), num=args.out_len)
     items = range(args.in_len, rates_frame.shape[0]-args.out_len)
     gpu_res = dict()
     for i in tqdm(items):
@@ -163,34 +159,28 @@ if __name__ == '__main__':
         df_history = df_data.iloc[i - args.in_len:i].reset_index(drop=True)
         df_actual = df_data.iloc[i:i + args.out_len].reset_index(drop=True)
         df_prediction = cur_res['prediction']
-        if pos_open is None:
-            if df_history['close'].iloc[-1] <= df_prediction['low'][0]:
-                buy_market = df_history['close'].iloc[-1]
-                b_open = np.any(df_prediction['high'] >= growth_series * buy_market)
-                if b_open:
-                    pos_open = buy_market
-                    n_pos += 1
-                req_growth = min_growth
-            else:
-                buy_limit = df_prediction['low'][0]
-                req_growth = min_growth
-                b_enter = np.any(df_prediction['high'][1:] >= growth_series[:-1] * buy_limit)
-                if b_enter and buy_limit >= df_actual['low'][0]:
-                    pos_open = buy_limit
-                    n_pos += 1
+        open_price = df_history['close'].iloc[-1]
+        min_price = df_prediction['low'].min()
+        max_price = df_prediction['high'].max()
+        delta_min = open_price / min_price
+        delta_max = max_price / open_price
+        delta_diff = math.fabs(delta_max - delta_min)
+        if delta_max >= delta_min:
+            open_dir = 1
         else:
-            if df_prediction['low'][0] * min_growth < df_history['close'].iloc[-1]:
-                take_profit = df_prediction['high'][0]
-                if (DIRECTION < 0 and df_actual['low'][0] <= take_profit) or \
-                        (DIRECTION > 0 and df_actual['high'][0] >= take_profit):
-                    cur_pl = calc_pl(pos_open, take_profit)
-                    pos_open = None
-                    capital += LEVERAGE * capital * cur_pl
-                    if capital <= 0:
-                        print('Margin call')
-                        sys.exit(-1)
+            open_dir = -1
+        if pos_dir is None or (pos_dir * open_dir < 0 and delta_diff > min_growth_perc * 0.01):
+            if pos_dir is not None:
+                cur_pl = calc_pl(pos_open, open_price, pos_dir)
+                capital += LEVERAGE * capital * cur_pl
+                if capital <= 0:
+                    print('Margin call')
+                    sys.exit(-1)
+            pos_dir = open_dir
+            n_pos += 1
+            pos_open = open_price
     if pos_open is not None:
-        cur_pl = calc_pl(pos_open, df_actual['close'].iloc[-1])
+        cur_pl = calc_pl(pos_open, df_actual['close'].iloc[-1], pos_dir)
         capital += LEVERAGE * capital * cur_pl
     yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
     print('Total capital:', capital, ' n_pos:', n_pos, ' yearly:', yearly_growth)
