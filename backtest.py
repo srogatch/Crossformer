@@ -31,7 +31,9 @@ if not mt5.initialize():
     mt5.shutdown()
     sys.exit(1)
 
-rates = mt5.copy_rates_range('US500.pro', mt5.TIMEFRAME_M1, datetime(2022, 4, 8, 1, 37), datetime.now())
+# start_date = datetime(2022, 4, 8, 1, 37)
+start_date = datetime(2022, 10, 9)
+rates = mt5.copy_rates_range('US500.pro', mt5.TIMEFRAME_M1, start_date, datetime.now())
 # create DataFrame out of the obtained data
 rates_frame = pd.DataFrame(rates)
 # convert time in seconds into the 'datetime' format
