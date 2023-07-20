@@ -167,7 +167,7 @@ if __name__ == '__main__':
         if pos_open is None:
             if df_history['close'].iloc[-1] <= df_prediction['low'][0]:
                 buy_market = df_history['close'].iloc[-1]
-                b_open = np.any(df_prediction['high'] - growth_series * buy_market >= 0)
+                b_open = np.any(df_prediction['high'] >= growth_series) # * buy_market
                 if b_open:
                     pos_open = buy_market
                     n_pos += 1
@@ -175,7 +175,7 @@ if __name__ == '__main__':
             else:
                 buy_limit = df_prediction['low'][0]
                 req_growth = min_growth
-                b_enter = np.any(df_prediction['high'][1:] - growth_series[:-1] * buy_limit >= 0)
+                b_enter = np.any(df_prediction['high'][1:] >= growth_series[:-1]) # * buy_limit
                 if b_enter and buy_limit >= df_actual['low'][0]:
                     pos_open = buy_limit
                     n_pos += 1
