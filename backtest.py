@@ -17,6 +17,7 @@ c_spread = 1.5259520851045277178296601486713e-4
 min_growth = math.pow(1 + c_spread, 3)
 max_daily_growth = 1.06
 minute_daily_growth = math.pow(max_daily_growth, 1.0/480)
+LEVERAGE = 10
 
 
 def calc_pl(open_price: float, close_price: float):
@@ -96,13 +97,16 @@ data = torch.Tensor(scaler.transform(df_data.values)).float().to(exp.device)
 exp.model.eval()
 
 pos_open = None
-tot_pl = 0
+capital = 1
 n_pos = 0
+n_days = 0
 with torch.no_grad():
     items = range(args.in_len, data.shape[0]-args.out_len)
     for i in tqdm(items):
         if (i+1) % 1440 == 0:
-            print('Running P/L:', tot_pl, ' n_pos:', n_pos)
+            n_days += 1
+            yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
+            print('Running capital:', capital, ' n_pos:', n_pos, ' n_days:', n_days, ' yearly:', yearly_growth)
         history = data[i-args.in_len:i].unsqueeze(0)
         actual = data[i:i+args.out_len].unsqueeze(0)
         prediction = exp.model(history)
@@ -138,15 +142,17 @@ with torch.no_grad():
             if df_prediction['low'][0] * min_growth < df_history['close'].iloc[-1]:
                 take_profit = df_prediction['high'][0]
                 if df_actual['high'][0] >= take_profit:
-                    # cur_pl = take_profit / ((1 + c_spread) * pos_open) - 1
                     cur_pl = calc_pl(pos_open, take_profit)
                     pos_open = None
-                    tot_pl += cur_pl
+                    capital += LEVERAGE * capital * cur_pl
+                    if capital <= 0:
+                        print('Margin call')
+                        sys.exit(-1)
 if pos_open is not None:
-    # cur_pl = df_actual['close'].iloc[-1] / ((1 + c_spread) * pos_open) - 1
     cur_pl = calc_pl(pos_open, df_actual['close'].iloc[-1])
-    tot_pl += cur_pl
-print('Total P/L:', tot_pl, ' n_pos:', n_pos)
+    capital += LEVERAGE * capital * cur_pl
+yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
+print('Total capital:', capital, ' n_pos:', n_pos, ' yearly:', yearly_growth)
 
 # mae, mse, rmse, mape, mspe = exp.eval(args.setting_name, args.save_pred, args.inverse)
 
