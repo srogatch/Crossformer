@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import pickle
 from datetime import datetime
@@ -7,9 +8,22 @@ import sys
 import pandas as pd
 import MetaTrader5 as mt5
 import torch
+from tqdm import tqdm
 
 from cross_exp.exp_crossformer import Exp_crossformer
 from utils.tools import load_args, string_split, StandardScaler
+
+c_spread = 1.5259520851045277178296601486713e-4
+min_growth = math.pow(1 + c_spread, 3)
+max_daily_growth = 1.06
+minute_daily_growth = math.pow(max_daily_growth, 1.0/480)
+
+
+def calc_pl(open_price: float, close_price: float):
+    # cur_pl = close_price / ((1 + c_spread) * open_price) - 1
+    cur_pl = open_price / ((1 + c_spread) * close_price) - 1
+    return cur_pl
+
 
 if not mt5.initialize():
     print("initialize() failed")
@@ -78,13 +92,19 @@ else:
 column_names = ['open', 'high', 'low', 'close', 'tick_volume']
 df_data = rates_frame[column_names]
 scaler = StandardScaler(mean = args.scale_statistic['mean'], std = args.scale_statistic['std'])
-data = scaler.transform(df_data.values)
+data = torch.Tensor(scaler.transform(df_data.values)).float().to(exp.device)
 exp.model.eval()
 
+pos_open = None
+tot_pl = 0
+n_pos = 0
 with torch.no_grad():
-    for i in range(args.in_len, data.shape[0]-args.out_len):
-        history = torch.Tensor(data[i-args.in_len:i]).unsqueeze(0).float().to(exp.device)
-        actual = torch.Tensor(data[i:i+args.out_len]).unsqueeze(0).float().to(exp.device)
+    items = range(args.in_len, data.shape[0]-args.out_len)
+    for i in tqdm(items):
+        if (i+1) % 1440 == 0:
+            print('Running P/L:', tot_pl, ' n_pos:', n_pos)
+        history = data[i-args.in_len:i].unsqueeze(0)
+        actual = data[i:i+args.out_len].unsqueeze(0)
         prediction = exp.model(history)
         history = scaler.inverse_transform(history).squeeze(0).to('cpu').numpy()
         actual = scaler.inverse_transform(actual).squeeze(0).to('cpu').numpy()
@@ -92,7 +112,41 @@ with torch.no_grad():
         df_history = pd.DataFrame(history, columns=column_names)
         df_actual = pd.DataFrame(actual, columns=column_names)
         df_prediction = pd.DataFrame(prediction, columns=column_names)
-
+        if pos_open is None:
+            if df_history['close'].iloc[-1] <= df_prediction['low'][0]:
+                buy_market = df_history['close'].iloc[-1]
+                req_growth = min_growth
+                for j in range(0, args.out_len):
+                    if df_prediction['high'][j] >= req_growth * buy_market:
+                        pos_open = buy_market
+                        n_pos += 1
+                        break
+                    req_growth *= minute_daily_growth
+            else:
+                buy_limit = df_prediction['low'][0]
+                req_growth = min_growth
+                b_enter = False
+                for j in range(1, args.out_len):
+                    if df_prediction['high'][j] >= req_growth * buy_limit:
+                        b_enter = True
+                        break
+                    req_growth *= minute_daily_growth
+                if b_enter and buy_limit >= df_actual['low'][0]:
+                    pos_open = buy_limit
+                    n_pos += 1
+        else:
+            if df_prediction['low'][0] * min_growth < df_history['close'].iloc[-1]:
+                take_profit = df_prediction['high'][0]
+                if df_actual['high'][0] >= take_profit:
+                    # cur_pl = take_profit / ((1 + c_spread) * pos_open) - 1
+                    cur_pl = calc_pl(pos_open, take_profit)
+                    pos_open = None
+                    tot_pl += cur_pl
+if pos_open is not None:
+    # cur_pl = df_actual['close'].iloc[-1] / ((1 + c_spread) * pos_open) - 1
+    cur_pl = calc_pl(pos_open, df_actual['close'].iloc[-1])
+    tot_pl += cur_pl
+print('Total P/L:', tot_pl, ' n_pos:', n_pos)
 
 # mae, mse, rmse, mape, mspe = exp.eval(args.setting_name, args.save_pred, args.inverse)
 

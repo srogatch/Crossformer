@@ -3,3 +3,4 @@ numpy
 pandas
 torch
 MetaTrader5
+tqdm
