@@ -17,7 +17,7 @@ from utils.tools import load_args, string_split, StandardScaler
 
 C_SPREAD = 1.5259520851045277178296601486713e-4
 MIN_GROWTH_PERC = 0.99
-LEVERAGE = 1
+LEVERAGE = 10
 BARS_PER_DAY = 1440
 COLUMN_NAMES = ['open', 'high', 'low', 'close', 'tick_volume']
 BATCH_SIZE = 128
