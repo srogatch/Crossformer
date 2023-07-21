@@ -160,7 +160,7 @@ if __name__ == '__main__':
         if (i+1) % BARS_PER_DAY == 0:
             n_days += 1
             yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
-            print(f'\tCapital: {capital:.5f}, n_pos: {n_pos}, n_days: {n_days}, yearly: {yearly_growth:.5f}')
+            print(f' \tCapital: {capital:.5f}, n_pos: {n_pos}, n_days: {n_days}, yearly: {yearly_growth:.5f}')
         while gpu_res.get(i - i%BATCH_SIZE) is None:
             cur_res = res_qu.get()
             gpu_res[cur_res['i_rate']] = cur_res
