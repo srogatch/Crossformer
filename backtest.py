@@ -139,7 +139,7 @@ if __name__ == '__main__':
     del os.environ['CUDA_VISIBLE_DEVICES']
 
     pos_open = None
-    pos_dir = None
+    pos_dir = 0
     capital = 1
     n_pos = 0
     n_days = 0
@@ -173,21 +173,29 @@ if __name__ == '__main__':
         df_actual = df_data.iloc[i_rate:i_rate + args.out_len].reset_index(drop=True)
         df_prediction = cur_res['predictions'][i%BATCH_SIZE]
         open_price = df_history['close'].iloc[-1]
-        min_price_at = df_prediction['low'].idxmin()
-        min_price = df_prediction['low'].iloc[min_price_at]
-        max_price_at = df_prediction['high'].idxmax()
-        max_price = df_prediction['high'].iloc[max_price_at]
+        min_price = df_prediction['low'].min()
+        max_price = df_prediction['high'].max()
         delta_min = open_price / min_price
         delta_max = max_price / open_price
         delta_diff = math.fabs(delta_max - delta_min)
-        if min_price_at >= max_price_at and delta_max >= delta_min:
+        if delta_max >= delta_min:
             open_dir = 1
-        elif min_price_at <= max_price_at and delta_min >= delta_max:
+        elif delta_max <= delta_min:
             open_dir = -1
         else:
             open_dir = 0
-        if open_dir != 0 and (pos_dir is None or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01)):
-            if pos_dir is not None:
+        b_close = False
+        if pos_dir > 0 and max_price <= open_price:
+            b_close = True
+        elif pos_dir < 0 and min_price >= open_price:
+            b_close = True
+        if b_close:
+            cur_pl = calc_pl(pos_open, open_price, pos_dir)
+            capital += LEVERAGE * capital * cur_pl
+            pos_dir = 0
+            pos_open = None
+        if not pos_dir or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01):
+            if pos_dir:
                 cur_pl = calc_pl(pos_open, open_price, pos_dir)
                 capital += LEVERAGE * capital * cur_pl
             pos_dir = open_dir
