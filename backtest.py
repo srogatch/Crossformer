@@ -109,6 +109,8 @@ def gpu_worker(in_qu: multiprocessing.Queue, out_qu: multiprocessing.Queue):
     scaler = StandardScaler(mean=args.scale_statistic['mean'], std=args.scale_statistic['std'])
     data = torch.Tensor(scaler.transform(df_data.values)).float().to(exp.device)
     exp.model.eval()
+    # Not supported on Windows
+    # exp.model = torch.compile(exp.model)
 
     while True:
         i_rate = in_qu.get()
@@ -171,16 +173,20 @@ if __name__ == '__main__':
         df_actual = df_data.iloc[i_rate:i_rate + args.out_len].reset_index(drop=True)
         df_prediction = cur_res['predictions'][i%BATCH_SIZE]
         open_price = df_history['close'].iloc[-1]
-        min_price = df_prediction['low'].min()
-        max_price = df_prediction['high'].max()
+        min_price_at = df_prediction['low'].idxmin()
+        min_price = df_prediction['low'].iloc[min_price_at]
+        max_price_at = df_prediction['high'].idxmax()
+        max_price = df_prediction['high'].iloc[max_price_at]
         delta_min = open_price / min_price
         delta_max = max_price / open_price
         delta_diff = math.fabs(delta_max - delta_min)
-        if delta_max >= delta_min:
+        if min_price_at >= max_price_at and delta_max >= delta_min:
             open_dir = 1
-        else:
+        elif min_price_at <= max_price_at and delta_min >= delta_max:
             open_dir = -1
-        if pos_dir is None or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01):
+        else:
+            open_dir = 0
+        if open_dir != 0 and (pos_dir is None or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01)):
             if pos_dir is not None:
                 cur_pl = calc_pl(pos_open, open_price, pos_dir)
                 capital += LEVERAGE * capital * cur_pl
