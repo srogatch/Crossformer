@@ -185,16 +185,16 @@ if __name__ == '__main__':
         else:
             open_dir = 0
         b_close = False
-        if pos_dir > 0 and max_price <= open_price:
+        if pos_dir > 0 and max_price <= df_actual['high'][0]:
             b_close = True
-        elif pos_dir < 0 and min_price >= open_price:
+        elif pos_dir < 0 and min_price >= df_actual['low'][0]:
             b_close = True
         if b_close:
             cur_pl = calc_pl(pos_open, open_price, pos_dir)
             capital += LEVERAGE * capital * cur_pl
             pos_dir = 0
             pos_open = None
-        if not pos_dir or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01):
+        if delta_diff > MIN_GROWTH_PERC * 0.01 and (not pos_dir or pos_dir * open_dir < 0):
             if pos_dir:
                 cur_pl = calc_pl(pos_open, open_price, pos_dir)
                 capital += LEVERAGE * capital * cur_pl
@@ -205,7 +205,7 @@ if __name__ == '__main__':
         cur_pl = calc_pl(pos_open, df_actual['close'].iloc[-1], pos_dir)
         capital += LEVERAGE * capital * cur_pl
     yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
-    print('Total capital:', capital, ' n_pos:', n_pos, ' yearly:', yearly_growth)
+    print(f'Total capital: {capital:.5f}, n_pos: {n_pos}, yearly: {yearly_growth:.5f}')
 
     # mae, mse, rmse, mape, mspe = exp.eval(args.setting_name, args.save_pred, args.inverse)
     for process in processes:
