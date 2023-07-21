@@ -160,7 +160,7 @@ if __name__ == '__main__':
         if (i+1) % BARS_PER_DAY == 0:
             n_days += 1
             yearly_growth = math.pow(math.pow(capital, 1.0/n_days), 261)
-            print('Running capital:', capital, ' n_pos:', n_pos, ' n_days:', n_days, ' yearly:', yearly_growth)
+            print(f'\tCapital: {capital:.5f}, n_pos: {n_pos}, n_days: {n_days}, yearly: {yearly_growth:.5f}')
         while gpu_res.get(i - i%BATCH_SIZE) is None:
             cur_res = res_qu.get()
             gpu_res[cur_res['i_rate']] = cur_res
@@ -185,16 +185,16 @@ if __name__ == '__main__':
         else:
             open_dir = 0
         b_close = False
-        if pos_dir > 0 and max_price <= df_actual['high'][0]:
-            b_close = True
-        elif pos_dir < 0 and min_price >= df_actual['low'][0]:
-            b_close = True
+        # if pos_dir > 0 and max_price <= df_actual['high'][0]:
+        #     b_close = True
+        # elif pos_dir < 0 and min_price >= df_actual['low'][0]:
+        #     b_close = True
         if b_close:
             cur_pl = calc_pl(pos_open, open_price, pos_dir)
             capital += LEVERAGE * capital * cur_pl
             pos_dir = 0
             pos_open = None
-        if delta_diff > MIN_GROWTH_PERC * 0.01 and (not pos_dir or pos_dir * open_dir < 0):
+        if  not pos_dir or (pos_dir * open_dir < 0 and delta_diff > MIN_GROWTH_PERC * 0.01):
             if pos_dir:
                 cur_pl = calc_pl(pos_open, open_price, pos_dir)
                 capital += LEVERAGE * capital * cur_pl
